@@ -1,0 +1,9 @@
+credentials.json
+*.csv
+uploads/saved/
+uploads/*.jpg
+uploads/*.png
+uploads/*.heic
+__pycache__/
+*.pyc
+.env

@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>名刺管理アプリ</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <header>
+    <h1>名刺管理アプリ</h1>
+    <p>名刺画像をアップロードするだけで情報を自動抽出します</p>
+  </header>
+
+  <main>
+
+    <!-- アップロードエリア -->
+    <section class="upload-section">
+      <div class="drop-zone" id="dropZone">
+        <div class="drop-icon">📷</div>
+        <p class="drop-text">ここに画像をドラッグ＆ドロップ</p>
+        <p class="drop-sub">または</p>
+        <label class="file-btn" for="fileInput">ファイルを選択</label>
+        <input type="file" id="fileInput" accept=".jpg,.jpeg,.png,.heic,.heif" capture="environment" hidden>
+        <p class="drop-sub">JPG / PNG / HEIC 対応</p>
+      </div>
+
+      <!-- プレビュー -->
+      <div class="preview-area" id="previewArea" style="display:none;">
+        <img id="previewImg" src="" alt="プレビュー">
+        <button class="btn-primary" id="uploadBtn">OCR 実行</button>
+        <button class="btn-secondary" id="cancelBtn">キャンセル</button>
+      </div>
+    </section>
+
+    <!-- ローディング -->
+    <div class="loading" id="loading" style="display:none;">
+      <div class="spinner"></div>
+      <p>読み取り中...</p>
+    </div>
+
+    <!-- 抽出結果（複数枚対応） -->
+    <section class="result-section" id="resultSection" style="display:none;">
+      <h2>抽出結果 <span id="resultCount" class="result-count"></span></h2>
+      <div id="resultCards"></div>
+    </section>
+
+    <!-- 名刺一覧 -->
+    <section class="list-section">
+      <div class="list-header">
+        <h2>保存済み名刺一覧</h2>
+        <a href="/download" class="btn-download">CSVダウンロード</a>
+      </div>
+
+      <!-- 検索バー -->
+      <div class="search-bar">
+        <input type="text" id="searchInput" placeholder="名前・会社名・部署・役職・メールで検索..." />
+        <button class="btn-clear" id="clearBtn" style="display:none;">✕</button>
+      </div>
+      <p class="search-count" id="searchCount"></p>
+
+      <div id="recordsContainer">
+        <p class="empty-msg" id="emptyMsg">まだデータがありません</p>
+        <div class="table-wrap">
+          <table class="records-table" id="recordsTable" style="display:none;">
+            <thead>
+              <tr>
+                <th>画像</th>
+                <th>名前</th>
+                <th>会社名</th>
+                <th>部署</th>
+                <th>役職</th>
+                <th>電話番号</th>
+                <th>メール</th>
+                <th>住所</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="recordsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- 編集モーダル -->
+  <div class="modal" id="editModal">
+    <div class="modal-backdrop" id="editModalBackdrop"></div>
+    <div class="modal-content edit-modal-content">
+      <button class="modal-close" id="editModalClose">✕</button>
+      <h3 class="edit-modal-title">名刺情報を編集</h3>
+      <form id="editForm">
+        <input type="hidden" id="editIndex">
+        <div class="edit-field"><label>名前</label><input type="text" id="edit名前"></div>
+        <div class="edit-field"><label>会社名</label><input type="text" id="edit会社名"></div>
+        <div class="edit-field"><label>部署</label><input type="text" id="edit部署"></div>
+        <div class="edit-field"><label>役職</label><input type="text" id="edit役職"></div>
+        <div class="edit-field"><label>電話番号</label><input type="text" id="edit電話番号"></div>
+        <div class="edit-field"><label>メール</label><input type="email" id="editメール"></div>
+        <div class="edit-field"><label>住所</label><input type="text" id="edit住所"></div>
+        <div class="edit-actions">
+          <button type="submit" class="btn-primary">保存</button>
+          <button type="button" class="btn-secondary" id="editCancelBtn">キャンセル</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 画像モーダル -->
+  <div class="modal" id="imgModal">
+    <div class="modal-backdrop" id="modalBackdrop"></div>
+    <div class="modal-content">
+      <button class="modal-close" id="modalClose">✕</button>
+      <img id="modalImg" src="" alt="名刺画像">
+    </div>
+  </div>
+
+  <script>
+    const dropZone     = document.getElementById("dropZone");
+    const fileInput    = document.getElementById("fileInput");
+    const previewArea  = document.getElementById("previewArea");
+    const previewImg   = document.getElementById("previewImg");
+    const uploadBtn    = document.getElementById("uploadBtn");
+    const cancelBtn    = document.getElementById("cancelBtn");
+    const loading      = document.getElementById("loading");
+    const resultSection = document.getElementById("resultSection");
+    const searchInput  = document.getElementById("searchInput");
+    const clearBtn     = document.getElementById("clearBtn");
+    const searchCount  = document.getElementById("searchCount");
+    const imgModal     = document.getElementById("imgModal");
+    const modalImg     = document.getElementById("modalImg");
+
+    let selectedFile = null;
+    let allRecords   = [];
+
+    // ---- アップロード ----
+    fileInput.addEventListener("change", e => showPreview(e.target.files[0]));
+
+    dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("drag-over"); });
+    dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
+    dropZone.addEventListener("drop", e => {
+      e.preventDefault();
+      dropZone.classList.remove("drag-over");
+      showPreview(e.dataTransfer.files[0]);
+    });
+
+    function showPreview(file) {
+      if (!file) return;
+      selectedFile = file;
+      previewImg.src = URL.createObjectURL(file);
+      dropZone.style.display = "none";
+      previewArea.style.display = "flex";
+      resultSection.style.display = "none";
+    }
+
+    cancelBtn.addEventListener("click", () => {
+      selectedFile = null;
+      fileInput.value = "";
+      dropZone.style.display = "flex";
+      previewArea.style.display = "none";
+    });
+
+    uploadBtn.addEventListener("click", async () => {
+      if (!selectedFile) return;
+      loading.style.display = "flex";
+      previewArea.style.display = "none";
+
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+
+      try {
+        const res  = await fetch("/upload", { method: "POST", body: formData });
+        const json = await res.json();
+        if (json.error) {
+          alert("エラー: " + json.error);
+        } else {
+          showResults(json.cards);
+          loadRecords();
+        }
+      } catch (e) {
+        alert("通信エラーが発生しました");
+      } finally {
+        loading.style.display = "none";
+        dropZone.style.display = "flex";
+        selectedFile = null;
+        fileInput.value = "";
+      }
+    });
+
+    // ---- 抽出結果表示（編集可能） ----
+    function showResults(cards) {
+      const container = document.getElementById("resultCards");
+      const countEl   = document.getElementById("resultCount");
+      container.innerHTML = "";
+      countEl.textContent = cards.length > 1 ? `（${cards.length}枚検出）` : "";
+
+      cards.forEach((data, i) => {
+        const cardId = `card_${i}`;
+        const div = document.createElement("div");
+        div.className = "result-card";
+        const imgHtml = data["画像"]
+          ? `<img class="result-thumb" src="/image/${data["画像"]}" alt="名刺画像" onclick="openModal('/image/${data["画像"]}')">`
+          : "";
+        div.innerHTML = `
+          ${cards.length > 1 ? `<p class="card-index">${i + 1}枚目</p>` : ""}
+          ${imgHtml}
+          <table class="result-table">
+            <tr><th>名前</th><td><input class="result-input" id="${cardId}_名前" value="${data["名前"] || ""}"></td></tr>
+            <tr><th>会社名</th><td><input class="result-input" id="${cardId}_会社名" value="${data["会社名"] || ""}"></td></tr>
+            <tr><th>部署</th><td><input class="result-input" id="${cardId}_部署" value="${data["部署"] || ""}"></td></tr>
+            <tr><th>役職</th><td><input class="result-input" id="${cardId}_役職" value="${data["役職"] || ""}"></td></tr>
+            <tr><th>電話番号</th><td><input class="result-input" id="${cardId}_電話番号" value="${data["電話番号"] || ""}"></td></tr>
+            <tr><th>メール</th><td><input class="result-input" id="${cardId}_メール" value="${data["メール"] || ""}"></td></tr>
+            <tr><th>住所</th><td><input class="result-input" id="${cardId}_住所" value="${data["住所"] || ""}"></td></tr>
+          </table>
+          <div class="result-save-area">
+            <button class="btn-save-card" onclick="saveCard(${i}, '${data["ファイル名"]}', '${data["画像"]}', this)">💾 保存する</button>
+            <span class="save-status" id="${cardId}_status"></span>
+          </div>
+        `;
+        container.appendChild(div);
+      });
+
+      resultSection.style.display = "block";
+      resultSection.scrollIntoView({ behavior: "smooth" });
+    }
+
+    async function saveCard(i, filename, imageFile, btn) {
+      const cardId = `card_${i}`;
+      const fields = ["名前", "会社名", "部署", "役職", "電話番号", "メール", "住所"];
+      const data = { "ファイル名": filename, "画像": imageFile };
+      fields.forEach(f => {
+        data[f] = document.getElementById(`${cardId}_${f}`).value;
+      });
+
+      btn.disabled = true;
+      btn.textContent = "保存中...";
+
+      const res  = await fetch("/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data })
+      });
+      const json = await res.json();
+      const statusEl = document.getElementById(`${cardId}_status`);
+      if (json.success) {
+        btn.textContent = "✅ 保存済み";
+        btn.style.background = "#d1fae5";
+        btn.style.color = "#065f46";
+        statusEl.textContent = "スプレッドシートに保存しました";
+        statusEl.style.color = "#10b981";
+        loadRecords();
+      } else {
+        btn.disabled = false;
+        btn.textContent = "💾 保存する";
+        statusEl.textContent = "エラー: " + json.error;
+        statusEl.style.color = "#dc2626";
+      }
+    }
+
+    // ---- 検索フィルター ----
+    searchInput.addEventListener("input", () => {
+      const q = searchInput.value.trim();
+      clearBtn.style.display = q ? "inline-block" : "none";
+      renderRecords(filterRecords(q));
+    });
+
+    clearBtn.addEventListener("click", () => {
+      searchInput.value = "";
+      clearBtn.style.display = "none";
+      renderRecords(allRecords);
+    });
+
+    function filterRecords(query) {
+      if (!query) return allRecords;
+      const q = query.toLowerCase();
+      return allRecords.filter(r =>
+        ["名前", "会社名", "部署", "役職", "メール", "住所", "電話番号"].some(key =>
+          (r[key] || "").toLowerCase().includes(q)
+        )
+      );
+    }
+
+    // ---- 一覧レンダリング ----
+    function renderRecords(records) {
+      const tbody   = document.getElementById("recordsBody");
+      const table   = document.getElementById("recordsTable");
+      const emptyMsg = document.getElementById("emptyMsg");
+
+      tbody.innerHTML = "";
+
+      if (records.length === 0) {
+        table.style.display = "none";
+        emptyMsg.style.display = "block";
+        emptyMsg.textContent = allRecords.length === 0 ? "まだデータがありません" : "検索結果がありません";
+        searchCount.textContent = "";
+        return;
+      }
+
+      emptyMsg.style.display = "none";
+      table.style.display = "table";
+      searchCount.textContent = searchInput.value
+        ? `${records.length} 件 / 全 ${allRecords.length} 件`
+        : `全 ${allRecords.length} 件`;
+
+      records.forEach((r, i) => {
+        const originalIndex = allRecords.indexOf(r);
+        const thumbHtml = r["画像"]
+          ? `<img class="thumb" src="/image/${r["画像"]}" alt="名刺" onclick="openModal('/image/${r["画像"]}')">`
+          : `<span class="no-img">なし</span>`;
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td class="td-img">${thumbHtml}</td>
+          <td>${r["名前"] || ""}</td>
+          <td>${r["会社名"] || ""}</td>
+          <td>${r["部署"] || ""}</td>
+          <td>${r["役職"] || ""}</td>
+          <td>${r["電話番号"] || ""}</td>
+          <td>${r["メール"] || ""}</td>
+          <td>${r["住所"] || ""}</td>
+          <td class="td-actions">
+            <button class="btn-edit" onclick="openEditModal(${originalIndex})">編集</button>
+            <button class="btn-delete" onclick="deleteRecord(${originalIndex})">削除</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function loadRecords() {
+      const res = await fetch("/records");
+      allRecords = await res.json();
+      renderRecords(filterRecords(searchInput.value.trim()));
+    }
+
+    // ---- 削除 ----
+    async function deleteRecord(index) {
+      if (!confirm("このデータを削除しますか？")) return;
+      const res  = await fetch("/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ index })
+      });
+      const json = await res.json();
+      if (json.success) loadRecords();
+    }
+
+    // ---- 編集モーダル ----
+    const editModal = document.getElementById("editModal");
+    const editFields = ["名前", "会社名", "部署", "役職", "電話番号", "メール", "住所"];
+
+    function openEditModal(index) {
+      const r = allRecords[index];
+      document.getElementById("editIndex").value = index;
+      editFields.forEach(f => {
+        document.getElementById("edit" + f).value = r[f] || "";
+      });
+      editModal.classList.add("open");
+    }
+
+    document.getElementById("editModalClose").addEventListener("click", closeEditModal);
+    document.getElementById("editModalBackdrop").addEventListener("click", closeEditModal);
+    document.getElementById("editCancelBtn").addEventListener("click", closeEditModal);
+
+    function closeEditModal() {
+      editModal.classList.remove("open");
+    }
+
+    document.getElementById("editForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const index = parseInt(document.getElementById("editIndex").value);
+      const original = allRecords[index];
+      const data = { ...original };
+      editFields.forEach(f => {
+        data[f] = document.getElementById("edit" + f).value;
+      });
+
+      const res = await fetch("/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ index, data })
+      });
+      const json = await res.json();
+      if (json.success) {
+        closeEditModal();
+        loadRecords();
+      } else {
+        alert("エラー: " + json.error);
+      }
+    });
+
+    // ---- 画像モーダル ----
+    function openModal(src) {
+      modalImg.src = src;
+      imgModal.classList.add("open");
+    }
+
+    document.getElementById("modalClose").addEventListener("click", closeModal);
+    document.getElementById("modalBackdrop").addEventListener("click", closeModal);
+    document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+
+    function closeModal() {
+      imgModal.classList.remove("open");
+      modalImg.src = "";
+    }
+
+    // 初回読み込み
+    loadRecords();
+  </script>
+
+</body>
+</html>
