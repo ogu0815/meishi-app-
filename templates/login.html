@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ログイン - 名刺管理</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, "Hiragino Sans", sans-serif;
+      background: linear-gradient(135deg, #4f46e5 0%, #06b6d4 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .login-card {
+      background: #fff;
+      border-radius: 24px;
+      padding: 40px 32px;
+      width: 100%;
+      max-width: 360px;
+      box-shadow: 0 24px 64px rgba(79,70,229,0.2);
+      text-align: center;
+    }
+
+    .login-icon {
+      font-size: 3rem;
+      margin-bottom: 12px;
+      display: block;
+    }
+
+    .login-title {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #1e1b4b;
+      margin-bottom: 6px;
+    }
+
+    .login-sub {
+      font-size: 0.85rem;
+      color: #6b7280;
+      margin-bottom: 32px;
+    }
+
+    .input-wrap {
+      position: relative;
+      margin-bottom: 16px;
+      text-align: left;
+    }
+
+    .input-wrap label {
+      display: block;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: #6b7280;
+      margin-bottom: 6px;
+      letter-spacing: 0.03em;
+    }
+
+    .input-wrap input {
+      width: 100%;
+      padding: 14px 16px;
+      border: 1.5px solid #e8eaf6;
+      border-radius: 12px;
+      font-size: 1rem;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+      background: #f8faff;
+      color: #1e1b4b;
+    }
+    .input-wrap input:focus {
+      border-color: #4f46e5;
+      background: #fff;
+    }
+
+    .error-msg {
+      background: #fee2e2;
+      color: #dc2626;
+      font-size: 0.85rem;
+      padding: 10px 14px;
+      border-radius: 10px;
+      margin-bottom: 16px;
+      text-align: left;
+      font-weight: 500;
+    }
+
+    .btn-login {
+      width: 100%;
+      padding: 15px;
+      background: linear-gradient(135deg, #4f46e5, #06b6d4);
+      color: #fff;
+      border: none;
+      border-radius: 50px;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.15s;
+      margin-top: 8px;
+      letter-spacing: 0.02em;
+    }
+    .btn-login:active { opacity: 0.85; transform: scale(0.98); }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <span class="login-icon">🪪</span>
+    <h1 class="login-title">名刺管理</h1>
+    <p class="login-sub">パスワードを入力してください</p>
+
+    {% if error %}
+    <div class="error-msg">⚠️ {{ error }}</div>
+    {% endif %}
+
+    <form method="POST" action="/login">
+      <div class="input-wrap">
+        <label>パスワード</label>
+        <input type="password" name="password" placeholder="パスワードを入力" autofocus autocomplete="current-password">
+      </div>
+      <button type="submit" class="btn-login">ログイン →</button>
+    </form>
+  </div>
+</body>
+</html>

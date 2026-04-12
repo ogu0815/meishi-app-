@@ -10,7 +10,8 @@ import json
 import uuid
 import platform
 from PIL import Image
-from flask import Flask, render_template, request, jsonify, send_file
+from functools import wraps
+from flask import Flask, render_template, request, jsonify, send_file, session, redirect, url_for
 import pandas as pd
 from storage import append_record, read_all_records, delete_record, update_record, STORAGE_MODE
 
@@ -48,6 +49,18 @@ def _get_vision_client():
         return vision.ImageAnnotatorClient(credentials=creds)
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "meishi-secret-key-change-in-production")
+
+# パスワード設定（環境変数 APP_PASSWORD で変更可能）
+APP_PASSWORD = os.environ.get("APP_PASSWORD", "meishi1234")
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("logged_in"):
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return decorated
 
 UPLOAD_FOLDER  = "uploads"
 SAVED_FOLDER   = "uploads/saved"   # 名刺画像の永続保存先
@@ -304,13 +317,32 @@ def parse_multiple_cards(text: str, filename: str) -> list[dict]:
 # ルーティング
 # -------------------------------------------------------------
 
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = ""
+    if request.method == "POST":
+        if request.form.get("password") == APP_PASSWORD:
+            session["logged_in"] = True
+            return redirect(url_for("index"))
+        error = "パスワードが違います"
+    return render_template("login.html", error=error)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+
 @app.route("/")
+@login_required
 def index():
     """トップページ"""
     return render_template("index.html")
 
 
 @app.route("/upload", methods=["POST"])
+@login_required
 def upload():
     """画像をアップロードしてOCR処理する"""
     if "file" not in request.files:
@@ -355,6 +387,7 @@ def upload():
 
 
 @app.route("/save", methods=["POST"])
+@login_required
 def save_card():
     """編集済みの名刺データを保存する"""
     data = request.json.get("data")
@@ -368,6 +401,7 @@ def save_card():
 
 
 @app.route("/records")
+@login_required
 def records():
     """保存済みの名刺一覧を返す"""
     try:
@@ -377,6 +411,7 @@ def records():
 
 
 @app.route("/download")
+@login_required
 def download():
     """データをCSVとしてダウンロードする"""
     try:
@@ -392,6 +427,7 @@ def download():
 
 
 @app.route("/image/<filename>")
+@login_required
 def serve_image(filename):
     """保存済み名刺画像を返す"""
     path = os.path.join(SAVED_FOLDER, filename)
@@ -401,6 +437,7 @@ def serve_image(filename):
 
 
 @app.route("/delete", methods=["POST"])
+@login_required
 def delete():
     """指定行を削除する"""
     index = request.json.get("index")
@@ -412,6 +449,7 @@ def delete():
 
 
 @app.route("/update", methods=["POST"])
+@login_required
 def update():
     """指定行を更新する"""
     payload = request.json

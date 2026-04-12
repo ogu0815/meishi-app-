@@ -9,8 +9,9 @@
 <body>
 
   <header>
-    <h1>名刺管理アプリ</h1>
-    <p>名刺画像をアップロードするだけで情報を自動抽出します</p>
+    <span class="header-icon">🪪</span>
+    <h1>名刺管理</h1>
+    <p>写真を撮るだけで自動で情報を抽出・保存</p>
   </header>
 
   <main>
@@ -62,8 +63,11 @@
 
       <div id="recordsContainer">
         <p class="empty-msg" id="emptyMsg">まだデータがありません</p>
+        <!-- モバイル：カード表示 -->
+        <div class="cards-list" id="cardsList"></div>
+        <!-- PC：テーブル表示 -->
         <div class="table-wrap">
-          <table class="records-table" id="recordsTable" style="display:none;">
+          <table class="records-table" id="recordsTable">
             <thead>
               <tr>
                 <th>画像</th>
@@ -89,8 +93,9 @@
   <div class="modal" id="editModal">
     <div class="modal-backdrop" id="editModalBackdrop"></div>
     <div class="modal-content edit-modal-content">
+      <div class="modal-handle"></div>
       <button class="modal-close" id="editModalClose">✕</button>
-      <h3 class="edit-modal-title">名刺情報を編集</h3>
+      <h3 class="edit-modal-title">✏️ 名刺情報を編集</h3>
       <form id="editForm">
         <input type="hidden" id="editIndex">
         <div class="edit-field"><label>名前</label><input type="text" id="edit名前"></div>
@@ -285,14 +290,14 @@
 
     // ---- 一覧レンダリング ----
     function renderRecords(records) {
-      const tbody   = document.getElementById("recordsBody");
-      const table   = document.getElementById("recordsTable");
+      const tbody    = document.getElementById("recordsBody");
+      const cardsList = document.getElementById("cardsList");
       const emptyMsg = document.getElementById("emptyMsg");
 
       tbody.innerHTML = "";
+      cardsList.innerHTML = "";
 
       if (records.length === 0) {
-        table.style.display = "none";
         emptyMsg.style.display = "block";
         emptyMsg.textContent = allRecords.length === 0 ? "まだデータがありません" : "検索結果がありません";
         searchCount.textContent = "";
@@ -300,15 +305,46 @@
       }
 
       emptyMsg.style.display = "none";
-      table.style.display = "table";
       searchCount.textContent = searchInput.value
         ? `${records.length} 件 / 全 ${allRecords.length} 件`
         : `全 ${allRecords.length} 件`;
 
-      records.forEach((r, i) => {
+      records.forEach((r) => {
         const originalIndex = allRecords.indexOf(r);
-        const thumbHtml = r["画像"]
-          ? `<img class="thumb" src="/image/${r["画像"]}" alt="名刺" onclick="openModal('/image/${r["画像"]}')">`
+        const thumbSrc = r["画像"] ? `/image/${r["画像"]}` : "";
+
+        // ---- モバイルカード ----
+        const card = document.createElement("div");
+        card.className = "meishi-card";
+        card.innerHTML = `
+          <div class="meishi-card-top">
+            <div class="meishi-thumb-wrap">
+              ${thumbSrc
+                ? `<img src="${thumbSrc}" alt="名刺" onclick="openModal('${thumbSrc}')">`
+                : `<span class="no-img-icon">🪪</span>`}
+            </div>
+            <div class="meishi-card-info">
+              <div class="meishi-name">${r["名前"] || "（名前なし）"}</div>
+              <div class="meishi-company">${r["会社名"] || ""}</div>
+              ${r["役職"] ? `<span class="meishi-tag">${r["役職"]}</span>` : ""}
+            </div>
+          </div>
+          <div class="meishi-card-detail">
+            ${r["電話番号"] ? `<div class="detail-item"><div class="detail-label">📞 電話</div><div class="detail-value">${r["電話番号"]}</div></div>` : ""}
+            ${r["メール"] ? `<div class="detail-item"><div class="detail-label">✉️ メール</div><div class="detail-value">${r["メール"]}</div></div>` : ""}
+            ${r["部署"] ? `<div class="detail-item"><div class="detail-label">🏢 部署</div><div class="detail-value">${r["部署"]}</div></div>` : ""}
+            ${r["住所"] ? `<div class="detail-item" style="grid-column:1/-1"><div class="detail-label">📍 住所</div><div class="detail-value">${r["住所"]}</div></div>` : ""}
+          </div>
+          <div class="meishi-card-actions">
+            <button class="btn-card-action btn-card-edit" onclick="openEditModal(${originalIndex})">✏️ 編集</button>
+            <button class="btn-card-action btn-card-delete" onclick="deleteRecord(${originalIndex})">🗑 削除</button>
+          </div>
+        `;
+        cardsList.appendChild(card);
+
+        // ---- PCテーブル行 ----
+        const thumbHtml = thumbSrc
+          ? `<img class="thumb" src="${thumbSrc}" alt="名刺" onclick="openModal('${thumbSrc}')">`
           : `<span class="no-img">なし</span>`;
         const tr = document.createElement("tr");
         tr.innerHTML = `
