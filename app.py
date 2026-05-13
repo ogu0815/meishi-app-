@@ -80,22 +80,138 @@ def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+def detect_and_crop_cards(image_path):
+    """
+    画像から名刺領域を検出してクロップした画像リストを返す。
+    名刺が1枚しか検出されない or 検出失敗の場合は元画像をそのまま返す。
+    """
+    import cv2
+    import numpy as np
+
+    img = cv2.imread(image_path)
+    if img is None:
+        return [image_path]  # 読み込めない場合は元画像
+
+    h_img, w_img = img.shape[:2]
+    img_area = h_img * w_img
+
+    gray    = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+    edges   = cv2.Canny(blurred, 30, 120)
+    # 輪郭を繋げる
+    kernel  = np.ones((5, 5), np.uint8)
+    dilated = cv2.dilate(edges, kernel, iterations=2)
+
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    candidates = []
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        # 画像全体の3%〜80%の面積のものを対象
+        if area < img_area * 0.03 or area > img_area * 0.80:
+            continue
+        x, y, w, h = cv2.boundingRect(cnt)
+        ratio = w / h if h > 0 else 0
+        # 名刺のアスペクト比：横置き(1.3〜2.2) or 縦置き(0.45〜0.77)
+        if 1.3 <= ratio <= 2.2 or 0.45 <= ratio <= 0.77:
+            candidates.append((x, y, w, h, area))
+
+    # 重複する領域をマージ（IoUで判定）
+    def iou(a, b):
+        ax, ay, aw, ah, _ = a
+        bx, by, bw, bh, _ = b
+        ix = max(ax, bx); iy = max(ay, by)
+        iw = min(ax+aw, bx+bw) - ix
+        ih = min(ay+ah, by+bh) - iy
+        if iw <= 0 or ih <= 0:
+            return 0
+        inter = iw * ih
+        union = aw*ah + bw*bh - inter
+        return inter / union if union > 0 else 0
+
+    filtered = []
+    for c in sorted(candidates, key=lambda x: -x[4]):
+        if all(iou(c, f) < 0.4 for f in filtered):
+            filtered.append(c)
+
+    # 1枚以下 or 検出失敗 → 元画像のまま
+    if len(filtered) <= 1:
+        return [image_path]
+
+    # 各名刺をクロップして保存
+    cropped_paths = []
+    for i, (x, y, w, h, _) in enumerate(filtered):
+        pad = 10  # 少し余白を持たせる
+        x1 = max(0, x - pad); y1 = max(0, y - pad)
+        x2 = min(w_img, x + w + pad); y2 = min(h_img, y + h + pad)
+        cropped = img[y1:y2, x1:x2]
+        crop_id   = uuid.uuid4().hex
+        crop_path = os.path.join(SAVED_FOLDER, f"{crop_id}.jpg")
+        cv2.imwrite(crop_path, cropped)
+        cropped_paths.append(crop_path)
+
+    return cropped_paths
+
+
+def preprocess_image(image_path):
+    """OCR精度向上のための画像前処理"""
+    from PIL import ImageEnhance, ImageFilter
+    img = Image.open(image_path).convert("RGB")
+
+    # 小さすぎる画像は拡大（Vision APIは高解像度が有利）
+    w, h = img.size
+    if w < 1200:
+        scale = 1200 / w
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+    # シャープネス強調
+    img = img.filter(ImageFilter.SHARPEN)
+    img = img.filter(ImageFilter.SHARPEN)
+
+    # コントラスト強調
+    img = ImageEnhance.Contrast(img).enhance(1.3)
+
+    # 明るさ調整
+    img = ImageEnhance.Brightness(img).enhance(1.05)
+
+    # 前処理済み画像を一時保存
+    pre_path = image_path.replace(".jpg", "_pre.jpg")
+    img.save(pre_path, "JPEG", quality=95)
+    return pre_path
+
+
 def extract_text(image_path):
     """Google Vision API で画像からテキストを抽出する"""
-    client = _get_vision_client()
-    with open(image_path, "rb") as f:
-        content = f.read()
-    image = vision.Image(content=content)
-    response = client.text_detection(image=image)
-    if response.error.message:
-        raise RuntimeError(f"Vision API エラー: {response.error.message}")
-    texts = response.text_annotations
-    return texts[0].description if texts else ""
+    # 前処理
+    pre_path = preprocess_image(image_path)
+    try:
+        client = _get_vision_client()
+        with open(pre_path, "rb") as f:
+            content = f.read()
+        image = vision.Image(content=content)
+        # 日本語ヒントを追加して精度向上
+        image_context = vision.ImageContext(language_hints=["ja", "en"])
+        response = client.text_detection(image=image, image_context=image_context)
+        if response.error.message:
+            raise RuntimeError(f"Vision API エラー: {response.error.message}")
+        texts = response.text_annotations
+        return texts[0].description if texts else ""
+    finally:
+        # 前処理済み一時ファイルを削除
+        if os.path.exists(pre_path):
+            os.remove(pre_path)
 
 
-def extract_phone(text):
+def extract_phones(text):
+    """電話番号を最大2件抽出して返す"""
     matches = re.findall(r'(?:\+81[-\s]?)?0\d{1,4}[-\s]?\d{2,4}[-\s]?\d{3,4}', text)
-    return matches[0].strip() if matches else ""
+    # 重複除去
+    seen = []
+    for m in matches:
+        m = m.strip()
+        if m not in seen:
+            seen.append(m)
+    return seen[:2]  # 最大2件
 
 
 def extract_email(text):
@@ -225,13 +341,15 @@ def extract_address(text):
 
 
 def parse_card(text, filename):
+    phones = extract_phones(text)
     return {
         "ファイル名": filename,
         "名前":       extract_name(text),
         "会社名":     extract_company(text),
         "部署":       extract_department(text),
         "役職":       extract_title(text),
-        "電話番号":   extract_phone(text),
+        "電話番号1":  phones[0] if len(phones) > 0 else "",
+        "電話番号2":  phones[1] if len(phones) > 1 else "",
         "メール":     extract_email(text),
         "住所":       extract_address(text),
     }
@@ -393,11 +511,29 @@ def upload():
             # 画像ファイル（JPG / PNG / HEIC / TIFF）
             img = Image.open(tmp_path).convert("RGB")
             img.save(saved_path, "JPEG", quality=85)
-            text = extract_text(saved_path)
-            cards = parse_multiple_cards(text, file.filename)
-            for card in cards:
-                card["画像"] = saved_filename
-            all_cards = cards
+
+            # 名刺を個別にクロップ（複数枚検出時）
+            cropped_paths = detect_and_crop_cards(saved_path)
+
+            if len(cropped_paths) > 1:
+                # 複数枚検出：クロップ画像ごとにOCR
+                for crop_path in cropped_paths:
+                    crop_filename = os.path.basename(crop_path)
+                    text = extract_text(crop_path)
+                    cards = parse_multiple_cards(text, file.filename)
+                    for card in cards:
+                        card["画像"] = crop_filename
+                    all_cards.extend(cards)
+                # 元画像（全体）は不要なので削除
+                if os.path.exists(saved_path):
+                    os.remove(saved_path)
+            else:
+                # 1枚のみ：元画像のままOCR
+                text = extract_text(saved_path)
+                cards = parse_multiple_cards(text, file.filename)
+                for card in cards:
+                    card["画像"] = saved_filename
+                all_cards = cards
 
         return jsonify({"success": True, "cards": all_cards, "count": len(all_cards)})
 

@@ -79,7 +79,8 @@
                 <th>会社名</th>
                 <th>部署</th>
                 <th>役職</th>
-                <th>電話番号</th>
+                <th>電話番号1</th>
+                <th>電話番号2</th>
                 <th>メール</th>
                 <th>住所</th>
                 <th></th>
@@ -106,7 +107,8 @@
         <div class="edit-field"><label>会社名</label><input type="text" id="edit会社名"></div>
         <div class="edit-field"><label>部署</label><input type="text" id="edit部署"></div>
         <div class="edit-field"><label>役職</label><input type="text" id="edit役職"></div>
-        <div class="edit-field"><label>電話番号</label><input type="text" id="edit電話番号"></div>
+        <div class="edit-field"><label>電話番号1</label><input type="text" id="edit電話番号1"></div>
+        <div class="edit-field"><label>電話番号2</label><input type="text" id="edit電話番号2"></div>
         <div class="edit-field"><label>メール</label><input type="email" id="editメール"></div>
         <div class="edit-field"><label>住所</label><input type="text" id="edit住所"></div>
         <div class="edit-actions">
@@ -221,7 +223,8 @@
             <tr><th>会社名</th><td><input class="result-input" id="${cardId}_会社名" value="${data["会社名"] || ""}"></td></tr>
             <tr><th>部署</th><td><input class="result-input" id="${cardId}_部署" value="${data["部署"] || ""}"></td></tr>
             <tr><th>役職</th><td><input class="result-input" id="${cardId}_役職" value="${data["役職"] || ""}"></td></tr>
-            <tr><th>電話番号</th><td><input class="result-input" id="${cardId}_電話番号" value="${data["電話番号"] || ""}"></td></tr>
+            <tr><th>電話番号1</th><td><input class="result-input" id="${cardId}_電話番号1" value="${data["電話番号1"] || ""}"></td></tr>
+            <tr><th>電話番号2</th><td><input class="result-input" id="${cardId}_電話番号2" value="${data["電話番号2"] || ""}"></td></tr>
             <tr><th>メール</th><td><input class="result-input" id="${cardId}_メール" value="${data["メール"] || ""}"></td></tr>
             <tr><th>住所</th><td><input class="result-input" id="${cardId}_住所" value="${data["住所"] || ""}"></td></tr>
           </table>
@@ -335,7 +338,8 @@
             </div>
           </div>
           <div class="meishi-card-detail">
-            ${r["電話番号"] ? `<div class="detail-item"><div class="detail-label">📞 電話</div><div class="detail-value">${r["電話番号"]}</div></div>` : ""}
+            ${r["電話番号1"] ? `<div class="detail-item"><div class="detail-label">📞 電話1</div><div class="detail-value">${r["電話番号1"]}</div></div>` : ""}
+            ${r["電話番号2"] ? `<div class="detail-item"><div class="detail-label">📞 電話2</div><div class="detail-value">${r["電話番号2"]}</div></div>` : ""}
             ${r["メール"] ? `<div class="detail-item"><div class="detail-label">✉️ メール</div><div class="detail-value">${r["メール"]}</div></div>` : ""}
             ${r["部署"] ? `<div class="detail-item"><div class="detail-label">🏢 部署</div><div class="detail-value">${r["部署"]}</div></div>` : ""}
             ${r["住所"] ? `<div class="detail-item" style="grid-column:1/-1"><div class="detail-label">📍 住所</div><div class="detail-value">${r["住所"]}</div></div>` : ""}
@@ -358,7 +362,8 @@
           <td>${r["会社名"] || ""}</td>
           <td>${r["部署"] || ""}</td>
           <td>${r["役職"] || ""}</td>
-          <td>${r["電話番号"] || ""}</td>
+          <td>${r["電話番号1"] || ""}</td>
+          <td>${r["電話番号2"] || ""}</td>
           <td>${r["メール"] || ""}</td>
           <td>${r["住所"] || ""}</td>
           <td class="td-actions">
@@ -390,7 +395,7 @@
 
     // ---- 編集モーダル ----
     const editModal = document.getElementById("editModal");
-    const editFields = ["名前", "会社名", "部署", "役職", "電話番号", "メール", "住所"];
+    const editFields = ["名前", "会社名", "部署", "役職", "電話番号1", "電話番号2", "メール", "住所"];
 
     function openEditModal(index) {
       const r = allRecords[index];
