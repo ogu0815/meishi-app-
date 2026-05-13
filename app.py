@@ -95,7 +95,7 @@ def allowed_file(filename):
 def detect_and_crop_cards(image_path):
     """
     画像から名刺領域を検出してクロップした画像リストを返す。
-    3種類の検出戦略を併用して幅広い状況に対応する。
+    スキャンPDF（白地×暗背景）と写真の両方に対応する2段階検出。
     """
     import cv2
     import numpy as np
@@ -109,40 +109,22 @@ def detect_and_crop_cards(image_path):
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    def get_contour_candidates(binary):
-        kernel  = np.ones((3, 3), np.uint8)
-        dilated = cv2.dilate(binary, kernel, iterations=3)
-        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    def is_card_ratio(w, h):
+        """名刺のアスペクト比か判定"""
+        r = w / h if h > 0 else 0
+        return 1.1 <= r <= 3.0 or 0.33 <= r <= 0.91
+
+    def contours_to_candidates(contours):
         results = []
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if area < img_area * 0.015 or area > img_area * 0.93:
+            if area < img_area * 0.01 or area > img_area * 0.94:
                 continue
             x, y, w, h = cv2.boundingRect(cnt)
-            ratio = w / h if h > 0 else 0
-            # 横置き名刺(1.2〜2.8) or 縦置き名刺(0.36〜0.83)
-            if 1.2 <= ratio <= 2.8 or 0.36 <= ratio <= 0.83:
+            if is_card_ratio(w, h):
                 results.append((x, y, w, h, area))
         return results
 
-    all_candidates = []
-
-    # 戦略1: 明るい白い領域（スキャンPDFに最適）
-    _, bright = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY)
-    all_candidates += get_contour_candidates(bright)
-
-    # 戦略2: Cannyエッジ（写真撮影に最適）
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges   = cv2.Canny(blurred, 20, 100)
-    all_candidates += get_contour_candidates(edges)
-
-    # 戦略3: Adaptive閾値（複雑な背景に対応）
-    blurred2  = cv2.GaussianBlur(gray, (11, 11), 0)
-    adaptive  = cv2.adaptiveThreshold(blurred2, 255,
-                    cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
-    all_candidates += get_contour_candidates(adaptive)
-
-    # IoU重複除去
     def iou(a, b):
         ax, ay, aw, ah, _ = a
         bx, by, bw, bh, _ = b
@@ -152,35 +134,62 @@ def detect_and_crop_cards(image_path):
         if iw <= 0 or ih <= 0:
             return 0
         inter = iw * ih
-        union = aw*ah + bw*bh - inter
-        return inter / union if union > 0 else 0
+        return inter / (aw*ah + bw*bh - inter) if (aw*ah + bw*bh - inter) > 0 else 0
 
-    filtered = []
-    for c in sorted(all_candidates, key=lambda x: -x[4]):
-        if all(iou(c, f) < 0.3 for f in filtered):
-            filtered.append(c)
+    def deduplicate(candidates, threshold=0.3):
+        out = []
+        for c in sorted(candidates, key=lambda x: -x[4]):
+            if all(iou(c, f) < threshold for f in out):
+                out.append(c)
+        return out
 
-    def save_crop(x, y, w, h, pad=12):
+    def save_crop(x, y, w, h, pad=10):
         x1 = max(0, x - pad); y1 = max(0, y - pad)
         x2 = min(w_img, x + w + pad); y2 = min(h_img, y + h + pad)
-        cropped = img[y1:y2, x1:x2]
-        cid  = uuid.uuid4().hex
+        cid = uuid.uuid4().hex
         path = os.path.join(SAVED_FOLDER, f"{cid}.jpg")
-        cv2.imwrite(path, cropped)
+        cv2.imwrite(path, img[y1:y2, x1:x2])
         return path
 
-    # 複数枚 → それぞれクロップ
+    # ===== 戦略A: スキャンPDF向け（白領域をそのまま検出・膨張なし）=====
+    # OTSUで自動閾値 → 白い名刺領域を膨張せずに検出
+    _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    cnts_otsu, _ = cv2.findContours(otsu, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    candidates_a  = contours_to_candidates(cnts_otsu)
+
+    # 固定閾値でも試す（スキャン品質が低い場合の補完）
+    _, fixed = cv2.threshold(gray, 140, 255, cv2.THRESH_BINARY)
+    cnts_fixed, _ = cv2.findContours(fixed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    candidates_a += contours_to_candidates(cnts_fixed)
+
+    # ===== 戦略B: 写真向け（Cannyエッジ＋最小限の膨張）=====
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges   = cv2.Canny(blurred, 20, 80)
+    kernel  = np.ones((3, 3), np.uint8)
+    dilated = cv2.dilate(edges, kernel, iterations=1)  # 1回のみ（隣接カード合体防止）
+    cnts_canny, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    candidates_b  = contours_to_candidates(cnts_canny)
+
+    # 両戦略の結果を統合して重複除去
+    all_candidates = candidates_a + candidates_b
+    filtered = deduplicate(all_candidates)
+
+    # 上→下、左→右の読み順でソート
+    if filtered:
+        row_h = h_img // max(len(filtered), 1)
+        filtered.sort(key=lambda c: (c[1] // max(row_h, 1), c[0]))
+
+    # 複数枚検出 → それぞれ切り出す
     if len(filtered) >= 2:
-        # 上から左→右の順に並べ直す（自然な読み順）
-        filtered.sort(key=lambda c: (c[1] // (h_img // max(len(filtered) // 2, 1)), c[0]))
         return [save_crop(x, y, w, h) for x, y, w, h, _ in filtered]
 
-    # 1枚 → 背景が多ければトリミング
+    # 1枚検出かつ余白あり → 切り出す
     if len(filtered) == 1:
         x, y, w, h, _ = filtered[0]
         if (w * h) / img_area < 0.80:
             return [save_crop(x, y, w, h)]
 
+    # 検出失敗 → 元画像のまま
     return [image_path]
 
 
@@ -695,6 +704,46 @@ def delete():
     try:
         delete_record(index)
         return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/crop-ocr", methods=["POST"])
+@login_required
+def crop_ocr():
+    """手動で指定した範囲を切り取ってOCRを実行する"""
+    payload  = request.json
+    filename = payload.get("filename", "")
+    x_pct    = float(payload.get("x", 0))
+    y_pct    = float(payload.get("y", 0))
+    w_pct    = float(payload.get("w", 1))
+    h_pct    = float(payload.get("h", 1))
+
+    src_path = os.path.join(SAVED_FOLDER, filename)
+    if not os.path.exists(src_path):
+        return jsonify({"error": "元画像が見つかりません"}), 404
+
+    try:
+        img = Image.open(src_path).convert("RGB")
+        iw, ih = img.size
+        x1 = max(0, int(x_pct * iw))
+        y1 = max(0, int(y_pct * ih))
+        x2 = min(iw, int((x_pct + w_pct) * iw))
+        y2 = min(ih, int((y_pct + h_pct) * ih))
+
+        if x2 - x1 < 20 or y2 - y1 < 20:
+            return jsonify({"error": "選択範囲が小さすぎます"}), 400
+
+        cropped = img.crop((x1, y1, x2, y2))
+        crop_id       = uuid.uuid4().hex
+        crop_filename = f"{crop_id}.jpg"
+        crop_path     = os.path.join(SAVED_FOLDER, crop_filename)
+        cropped.save(crop_path, "JPEG", quality=92)
+
+        text = extract_text(crop_path)
+        card = parse_card(text, filename)
+        card["画像"] = crop_filename
+        return jsonify({"success": True, "card": card})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

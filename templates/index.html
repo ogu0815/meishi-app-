@@ -123,6 +123,25 @@
     </div>
   </div>
 
+  <!-- 手動切り取りモーダル -->
+  <div class="modal" id="cropModal">
+    <div class="modal-backdrop" id="cropModalBackdrop"></div>
+    <div class="modal-content crop-modal-content">
+      <div class="modal-handle"></div>
+      <button class="modal-close" id="cropModalClose">✕</button>
+      <h3 class="edit-modal-title">✂️ 手動で切り取り</h3>
+      <p class="crop-hint">名刺の範囲をドラッグして選択 → OCR再実行</p>
+      <div class="crop-canvas-wrap">
+        <canvas id="cropCanvas"></canvas>
+      </div>
+      <div id="cropMsg" class="crop-msg"></div>
+      <div class="edit-actions">
+        <button class="btn-primary" id="cropConfirmBtn">✂️ 切り取ってOCR実行</button>
+        <button class="btn-secondary" id="cropCancelBtn">キャンセル</button>
+      </div>
+    </div>
+  </div>
+
   <!-- パスワード変更モーダル -->
   <div class="modal" id="pwModal">
     <div class="modal-backdrop" id="pwModalBackdrop"></div>
@@ -254,6 +273,7 @@
           </table>
           <div class="result-save-area">
             <button class="btn-save-card" onclick="saveCard(${i}, '${data["ファイル名"]}', '${data["画像"]}', this)">💾 保存する</button>
+            ${data["画像"] ? `<button class="btn-crop-card" onclick="openCropModal(${i}, '${data["画像"]}')">✂️ 切り取り直す</button>` : ""}
             <span class="save-status" id="${cardId}_status"></span>
           </div>
         `;
@@ -474,6 +494,141 @@
     function closeModal() {
       imgModal.classList.remove("open");
       modalImg.src = "";
+    }
+
+    // ---- 手動切り取りモーダル ----
+    let cropCardIndex = -1;
+    let cropImgFilename = '';
+    let cropSel = null;
+    let cropDrawing = false;
+    let cropStart = { x: 0, y: 0 };
+    const cropCanvas = document.getElementById('cropCanvas');
+    const cropCtx    = cropCanvas.getContext('2d');
+    let cropNativeImg = null;
+    let cropScale = 1;
+
+    function openCropModal(cardIndex, imageFilename) {
+      cropCardIndex   = cardIndex;
+      cropImgFilename = imageFilename;
+      cropSel = null;
+      document.getElementById('cropMsg').textContent = '';
+      const modal = document.getElementById('cropModal');
+      modal.classList.add('open');
+
+      const imgEl = new Image();
+      imgEl.crossOrigin = 'anonymous';
+      imgEl.src = `/image/${imageFilename}?t=${Date.now()}`;
+      imgEl.onload = () => {
+        cropNativeImg = imgEl;
+        const maxW = Math.min(window.innerWidth - 48, 620);
+        const maxH = Math.floor(window.innerHeight * 0.55);
+        cropScale = Math.min(maxW / imgEl.naturalWidth, maxH / imgEl.naturalHeight, 1);
+        cropCanvas.width  = Math.round(imgEl.naturalWidth  * cropScale);
+        cropCanvas.height = Math.round(imgEl.naturalHeight * cropScale);
+        drawCropCanvas();
+      };
+    }
+
+    function closeCropModal() {
+      document.getElementById('cropModal').classList.remove('open');
+    }
+    document.getElementById('cropModalClose').addEventListener('click', closeCropModal);
+    document.getElementById('cropModalBackdrop').addEventListener('click', closeCropModal);
+    document.getElementById('cropCancelBtn').addEventListener('click', closeCropModal);
+
+    function drawCropCanvas() {
+      cropCtx.clearRect(0, 0, cropCanvas.width, cropCanvas.height);
+      cropCtx.drawImage(cropNativeImg, 0, 0, cropCanvas.width, cropCanvas.height);
+      if (cropSel && cropSel.w > 2 && cropSel.h > 2) {
+        // 暗幕
+        cropCtx.fillStyle = 'rgba(0,0,0,0.45)';
+        cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
+        // 選択範囲を明るく切り抜き
+        cropCtx.clearRect(cropSel.x, cropSel.y, cropSel.w, cropSel.h);
+        cropCtx.drawImage(cropNativeImg,
+          cropSel.x / cropScale, cropSel.y / cropScale,
+          cropSel.w / cropScale, cropSel.h / cropScale,
+          cropSel.x, cropSel.y, cropSel.w, cropSel.h);
+        // 枠線
+        cropCtx.strokeStyle = '#4f46e5';
+        cropCtx.lineWidth = 2;
+        cropCtx.setLineDash([]);
+        cropCtx.strokeRect(cropSel.x, cropSel.y, cropSel.w, cropSel.h);
+      }
+    }
+
+    function getPointerPos(e) {
+      const rect = cropCanvas.getBoundingClientRect();
+      const src  = e.touches ? e.touches[0] : e;
+      return {
+        x: Math.max(0, Math.min(src.clientX - rect.left, cropCanvas.width)),
+        y: Math.max(0, Math.min(src.clientY - rect.top,  cropCanvas.height))
+      };
+    }
+
+    cropCanvas.addEventListener('pointerdown', e => {
+      cropCanvas.setPointerCapture(e.pointerId);
+      cropDrawing = true;
+      cropStart   = getPointerPos(e);
+      cropSel     = null;
+    });
+    cropCanvas.addEventListener('pointermove', e => {
+      if (!cropDrawing) return;
+      const pos = getPointerPos(e);
+      cropSel = {
+        x: Math.min(cropStart.x, pos.x),
+        y: Math.min(cropStart.y, pos.y),
+        w: Math.abs(pos.x - cropStart.x),
+        h: Math.abs(pos.y - cropStart.y)
+      };
+      drawCropCanvas();
+    });
+    cropCanvas.addEventListener('pointerup', () => { cropDrawing = false; });
+
+    document.getElementById('cropConfirmBtn').addEventListener('click', async () => {
+      const msgEl = document.getElementById('cropMsg');
+      if (!cropSel || cropSel.w < 20 || cropSel.h < 20) {
+        msgEl.textContent = '⚠️ 範囲が小さすぎます。もう一度ドラッグしてください。';
+        msgEl.style.color = '#ef4444';
+        return;
+      }
+      msgEl.textContent = '読み取り中...';
+      msgEl.style.color = '#6b7280';
+
+      // キャンバス座標 → 元画像の割合に変換
+      const xPct = cropSel.x / cropCanvas.width;
+      const yPct = cropSel.y / cropCanvas.height;
+      const wPct = cropSel.w / cropCanvas.width;
+      const hPct = cropSel.h / cropCanvas.height;
+
+      const res  = await fetch('/crop-ocr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: cropImgFilename, x: xPct, y: yPct, w: wPct, h: hPct })
+      });
+      const json = await res.json();
+      if (json.success) {
+        updateResultCard(cropCardIndex, json.card);
+        closeCropModal();
+      } else {
+        msgEl.textContent = '⚠️ ' + json.error;
+        msgEl.style.color = '#ef4444';
+      }
+    });
+
+    function updateResultCard(i, data) {
+      const cardId = `card_${i}`;
+      // サムネイル更新
+      const thumb = document.querySelector(`#resultCards .result-card:nth-child(${i + 1}) .result-thumb`);
+      if (thumb && data['画像']) thumb.src = `/image/${data['画像']}?t=${Date.now()}`;
+      // 切り取りボタンの画像ファイル名も更新
+      const cropBtn = document.querySelector(`#resultCards .result-card:nth-child(${i + 1}) .btn-crop-card`);
+      if (cropBtn && data['画像']) cropBtn.setAttribute('onclick', `openCropModal(${i}, '${data['画像']}')`);
+      // フィールド更新
+      ['名前','会社名','部署','役職','電話番号1','電話番号2','メール','住所'].forEach(f => {
+        const el = document.getElementById(`${cardId}_${f}`);
+        if (el && data[f] !== undefined) el.value = data[f];
+      });
     }
 
     // ---- パスワード変更モーダル ----
