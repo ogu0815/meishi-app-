@@ -521,7 +521,7 @@ def upload():
         all_cards = []
 
         if ext == "pdf":
-            # PDF：各ページを画像に変換してOCR
+            # PDF：各ページを画像に変換 → 名刺ごとにクロップ → OCR
             import fitz  # PyMuPDF
             pdf = fitz.open(tmp_path)
             for page_num in range(len(pdf)):
@@ -533,12 +533,31 @@ def upload():
                 page_saved_path = os.path.join(SAVED_FOLDER, page_saved_filename)
                 pix.save(page_saved_path)
 
-                text = extract_text(page_saved_path)
                 page_label = f"{file.filename} (P{page_num + 1})"
-                cards = parse_multiple_cards(text, page_label)
-                for card in cards:
-                    card["画像"] = page_saved_filename
-                all_cards.extend(cards)
+
+                # 画像と同様に名刺領域を個別クロップ
+                cropped_paths = detect_and_crop_cards(page_saved_path)
+
+                if len(cropped_paths) > 1:
+                    # 複数枚検出：クロップ画像ごとにOCR
+                    for crop_path in cropped_paths:
+                        crop_filename = os.path.basename(crop_path)
+                        text = extract_text(crop_path)
+                        cards = parse_multiple_cards(text, page_label)
+                        for card in cards:
+                            card["画像"] = crop_filename
+                        all_cards.extend(cards)
+                    # ページ全体画像は不要なので削除
+                    if os.path.exists(page_saved_path):
+                        os.remove(page_saved_path)
+                else:
+                    # 1枚 or 検出失敗：ページ全体画像でOCR
+                    text = extract_text(page_saved_path)
+                    cards = parse_multiple_cards(text, page_label)
+                    for card in cards:
+                        card["画像"] = page_saved_filename
+                    all_cards.extend(cards)
+
             pdf.close()
         else:
             # 画像ファイル（JPG / PNG / HEIC / TIFF）
