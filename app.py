@@ -570,24 +570,28 @@ def upload():
                 cropped_paths = detect_and_crop_cards(page_saved_path)
 
                 if len(cropped_paths) > 1:
-                    # 複数枚検出：クロップ画像ごとにOCR
+                    # 複数枚検出：切り抜き1枚 = 1件（parse_cardで重複防止）
                     for crop_path in cropped_paths:
                         crop_filename = os.path.basename(crop_path)
                         text = extract_text(crop_path)
-                        cards = parse_multiple_cards(text, page_label)
-                        for card in cards:
-                            card["画像"] = crop_filename
-                        all_cards.extend(cards)
+                        card = parse_card(text, page_label)
+                        card["画像"] = crop_filename
+                        all_cards.append(card)
                     # ページ全体画像は不要なので削除
                     if os.path.exists(page_saved_path):
                         os.remove(page_saved_path)
                 else:
-                    # 1枚 or 検出失敗：ページ全体画像でOCR
-                    text = extract_text(page_saved_path)
+                    # 切り抜きなし：ページ全体でOCR（複数名刺が混在する可能性あり）
+                    use_path = cropped_paths[0]
+                    use_filename = os.path.basename(use_path)
+                    text = extract_text(use_path)
                     cards = parse_multiple_cards(text, page_label)
                     for card in cards:
-                        card["画像"] = page_saved_filename
+                        card["画像"] = use_filename
                     all_cards.extend(cards)
+                    # 元画像と別ファイルになった場合（1枚トリミング済み）は元を削除
+                    if use_path != page_saved_path and os.path.exists(page_saved_path):
+                        os.remove(page_saved_path)
 
             pdf.close()
         else:
@@ -599,24 +603,28 @@ def upload():
             cropped_paths = detect_and_crop_cards(saved_path)
 
             if len(cropped_paths) > 1:
-                # 複数枚検出：クロップ画像ごとにOCR
+                # 複数枚検出：切り抜き1枚 = 1件（parse_cardで重複防止）
                 for crop_path in cropped_paths:
                     crop_filename = os.path.basename(crop_path)
                     text = extract_text(crop_path)
-                    cards = parse_multiple_cards(text, file.filename)
-                    for card in cards:
-                        card["画像"] = crop_filename
-                    all_cards.extend(cards)
+                    card = parse_card(text, file.filename)
+                    card["画像"] = crop_filename
+                    all_cards.append(card)
                 # 元画像（全体）は不要なので削除
                 if os.path.exists(saved_path):
                     os.remove(saved_path)
             else:
-                # 1枚のみ：元画像のままOCR
-                text = extract_text(saved_path)
+                # 切り抜きなし or 1枚トリミング：OCRして複数名刺を分割
+                use_path = cropped_paths[0]
+                use_filename = os.path.basename(use_path)
+                text = extract_text(use_path)
                 cards = parse_multiple_cards(text, file.filename)
                 for card in cards:
-                    card["画像"] = saved_filename
+                    card["画像"] = use_filename
                 all_cards = cards
+                # 元画像と別ファイルになった場合（1枚トリミング済み）は元を削除
+                if use_path != saved_path and os.path.exists(saved_path):
+                    os.remove(saved_path)
 
         return jsonify({"success": True, "cards": all_cards, "count": len(all_cards)})
 
