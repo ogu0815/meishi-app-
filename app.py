@@ -95,9 +95,7 @@ def allowed_file(filename):
 def detect_and_crop_cards(image_path):
     """
     画像から名刺領域を検出してクロップした画像リストを返す。
-    - 複数枚検出時：それぞれ切り出して返す
-    - 1枚検出かつ背景あり：切り出して返す
-    - 検出失敗：元画像をそのまま返す
+    3種類の検出戦略を併用して幅広い状況に対応する。
     """
     import cv2
     import numpy as np
@@ -109,34 +107,42 @@ def detect_and_crop_cards(image_path):
     h_img, w_img = img.shape[:2]
     img_area = h_img * w_img
 
-    def find_candidates(gray, method="canny"):
-        """エッジ検出 → 輪郭 → 名刺候補を返す"""
-        if method == "canny":
-            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-            edges = cv2.Canny(blurred, 20, 100)
-        else:
-            blurred = cv2.GaussianBlur(gray, (11, 11), 0)
-            edges = cv2.adaptiveThreshold(
-                blurred, 255,
-                cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2
-            )
-        kernel  = np.ones((5, 5), np.uint8)
-        dilated = cv2.dilate(edges, kernel, iterations=2)
-        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
+    def get_contour_candidates(binary):
+        kernel  = np.ones((3, 3), np.uint8)
+        dilated = cv2.dilate(binary, kernel, iterations=3)
+        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         results = []
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            # 画像全体の2%〜93%の面積を候補に
-            if area < img_area * 0.02 or area > img_area * 0.93:
+            if area < img_area * 0.015 or area > img_area * 0.93:
                 continue
             x, y, w, h = cv2.boundingRect(cnt)
             ratio = w / h if h > 0 else 0
-            # 名刺アスペクト比：横置き(1.2〜2.6) or 縦置き(0.38〜0.83)
-            if 1.2 <= ratio <= 2.6 or 0.38 <= ratio <= 0.83:
+            # 横置き名刺(1.2〜2.8) or 縦置き名刺(0.36〜0.83)
+            if 1.2 <= ratio <= 2.8 or 0.36 <= ratio <= 0.83:
                 results.append((x, y, w, h, area))
         return results
 
+    all_candidates = []
+
+    # 戦略1: 明るい白い領域（スキャンPDFに最適）
+    _, bright = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY)
+    all_candidates += get_contour_candidates(bright)
+
+    # 戦略2: Cannyエッジ（写真撮影に最適）
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges   = cv2.Canny(blurred, 20, 100)
+    all_candidates += get_contour_candidates(edges)
+
+    # 戦略3: Adaptive閾値（複雑な背景に対応）
+    blurred2  = cv2.GaussianBlur(gray, (11, 11), 0)
+    adaptive  = cv2.adaptiveThreshold(blurred2, 255,
+                    cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
+    all_candidates += get_contour_candidates(adaptive)
+
+    # IoU重複除去
     def iou(a, b):
         ax, ay, aw, ah, _ = a
         bx, by, bw, bh, _ = b
@@ -149,14 +155,12 @@ def detect_and_crop_cards(image_path):
         union = aw*ah + bw*bh - inter
         return inter / union if union > 0 else 0
 
-    def deduplicate(candidates):
-        filtered = []
-        for c in sorted(candidates, key=lambda x: -x[4]):
-            if all(iou(c, f) < 0.35 for f in filtered):
-                filtered.append(c)
-        return filtered
+    filtered = []
+    for c in sorted(all_candidates, key=lambda x: -x[4]):
+        if all(iou(c, f) < 0.3 for f in filtered):
+            filtered.append(c)
 
-    def save_crop(x, y, w, h, pad=15):
+    def save_crop(x, y, w, h, pad=12):
         x1 = max(0, x - pad); y1 = max(0, y - pad)
         x2 = min(w_img, x + w + pad); y2 = min(h_img, y + h + pad)
         cropped = img[y1:y2, x1:x2]
@@ -165,24 +169,18 @@ def detect_and_crop_cards(image_path):
         cv2.imwrite(path, cropped)
         return path
 
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # Canny と Adaptive の両方で検出して統合
-    candidates = find_candidates(gray, "canny") + find_candidates(gray, "adaptive")
-    filtered   = deduplicate(candidates)
-
-    # ---- 複数枚検出 → それぞれクロップ ----
+    # 複数枚 → それぞれクロップ
     if len(filtered) >= 2:
+        # 上から左→右の順に並べ直す（自然な読み順）
+        filtered.sort(key=lambda c: (c[1] // (h_img // max(len(filtered) // 2, 1)), c[0]))
         return [save_crop(x, y, w, h) for x, y, w, h, _ in filtered]
 
-    # ---- 1枚検出 → 背景が多ければクロップ ----
+    # 1枚 → 背景が多ければトリミング
     if len(filtered) == 1:
-        x, y, w, h, area = filtered[0]
-        coverage = (w * h) / img_area
-        if coverage < 0.80:   # 画像の80%未満 → 余白が多いのでトリミング
+        x, y, w, h, _ = filtered[0]
+        if (w * h) / img_area < 0.80:
             return [save_crop(x, y, w, h)]
 
-    # ---- 検出失敗 or 画面いっぱいに名刺 → 元画像のまま ----
     return [image_path]
 
 
@@ -253,7 +251,7 @@ def extract_email(text):
 
 
 def extract_name(text):
-    # 役職キーワード（名前候補から除外する）
+    # 名前候補から除外する役職キーワード
     TITLE_WORDS = [
         '代表取締役', '取締役', '専務', '常務', '監査役', '執行役員',
         '社長', '副社長', '会長', '副会長', '部長', '副部長', '課長',
@@ -261,26 +259,59 @@ def extract_name(text):
         'マネージャー', 'ディレクター', 'リーダー',
         'CEO', 'COO', 'CFO', 'CTO', 'CMO', 'President', 'Director', 'Manager'
     ]
+    # 部署・組織を示す語尾（この語で終わる行は名前ではない）
+    DEPT_SUFFIXES = [
+        '部', '課', '室', '局', 'グループ', 'チーム', 'センター',
+        '事業部', '工場', '研究所', '支店', '営業所', '出張所',
+        'Division', 'Department', 'Group', 'Section'
+    ]
+    # 除外するキーワードを含む行
+    EXCLUDE_CONTAINS = [
+        '株式会社', '有限会社', '合同会社', '法人', 'TEL', 'FAX',
+        'Email', '@', '〒', 'http', 'www', '製作所', '工業', '事業'
+    ]
+
+    def is_excluded(line):
+        if any(kw in line for kw in EXCLUDE_CONTAINS):
+            return True
+        if any(line == tw or tw in line for tw in TITLE_WORDS):
+            return True
+        for s in DEPT_SUFFIXES:
+            if line.endswith(s):
+                return True
+        return False
+
     lines = [l.strip() for l in text.splitlines() if l.strip()]
+
+    # ラベル付き（「氏名：」など）を最優先
     for line in lines:
-        m = re.search(r'(?:氏名|名前)[：:]\s*(.+)', line)
+        m = re.search(r'(?:氏名|名前)[:：]\s*(.+)', line)
         if m:
             return m.group(1).strip()
+
+    # 漢字2〜4文字のフルネーム（スペース区切り）
     for line in lines:
-        # 役職キーワードのみの行はスキップ
-        if any(line == tw or line.strip() == tw for tw in TITLE_WORDS):
+        if is_excluded(line):
             continue
         n = line.replace('\u3000', ' ').strip()
         if re.fullmatch(r'[\u4e00-\u9fff]{2,4}\s[\u4e00-\u9fff]{1,4}', n):
             return n
-        if re.fullmatch(r'[\u4e00-\u9fff]{2,6}', n):
+
+    # 漢字のみ2〜4文字（部署名を除外）
+    for line in lines:
+        if is_excluded(line):
+            continue
+        n = line.strip()
+        if re.fullmatch(r'[\u4e00-\u9fff]{2,4}', n):
             return n
+
+    # フリガナの次の行に名前がある場合
     for i, line in enumerate(lines):
         if re.search(r'[\u30A0-\u30FF]{2,}', line) and i + 1 < len(lines):
-            if re.search(r'[\u4e00-\u9fff]', lines[i + 1]):
-                cand = lines[i + 1]
-                if not any(cand == tw for tw in TITLE_WORDS):
-                    return cand
+            cand = lines[i + 1]
+            if re.search(r'[\u4e00-\u9fff]', cand) and not is_excluded(cand):
+                return cand
+
     return ""
 
 
