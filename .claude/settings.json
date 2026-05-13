@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"/Users/mac/Desktop/claude-projects/名刺管理アプリ\" && git add . && git diff --cached --quiet && echo '[git] 変更なし' || git commit -m \"auto: $(date '+%Y-%m-%d %H:%M')\" && git push 2>&1 | tail -3",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
