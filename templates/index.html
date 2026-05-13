@@ -22,9 +22,13 @@
         <div class="drop-icon">📷</div>
         <p class="drop-text">ここに画像をドラッグ＆ドロップ</p>
         <p class="drop-sub">または</p>
-        <label class="file-btn" for="fileInput">ファイルを選択</label>
-        <input type="file" id="fileInput" accept=".jpg,.jpeg,.png,.heic,.heif" capture="environment" hidden>
-        <p class="drop-sub">JPG / PNG / HEIC 対応</p>
+        <div class="file-btn-group">
+          <label class="file-btn" for="fileInput">📷 カメラで撮影</label>
+          <label class="file-btn file-btn-secondary" for="fileInputLib">🖼 写真から選ぶ</label>
+        </div>
+        <input type="file" id="fileInput" accept="image/*" capture="environment" hidden>
+        <input type="file" id="fileInputLib" accept=".jpg,.jpeg,.png,.heic,.heif,.tif,.tiff,.pdf,image/*" hidden>
+        <p class="drop-sub">JPG / PNG / HEIC / TIFF / PDF 対応</p>
       </div>
 
       <!-- プレビュー -->
@@ -142,6 +146,7 @@
 
     // ---- アップロード ----
     fileInput.addEventListener("change", e => showPreview(e.target.files[0]));
+    document.getElementById("fileInputLib").addEventListener("change", e => showPreview(e.target.files[0]));
 
     dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("drag-over"); });
     dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));

@@ -65,7 +65,7 @@ def login_required(f):
 UPLOAD_FOLDER  = "uploads"
 SAVED_FOLDER   = "uploads/saved"   # 名刺画像の永続保存先
 OUTPUT_CSV     = "meishi_data.csv"
-ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "heic", "heif"}
+ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "heic", "heif", "tif", "tiff", "pdf"}
 
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 os.makedirs(SAVED_FOLDER, exist_ok=True)
@@ -367,16 +367,40 @@ def upload():
     file.save(tmp_path)
 
     try:
-        # 永続保存（HEIC含む全形式をJPGに変換）
-        img = Image.open(tmp_path).convert("RGB")
-        img.save(saved_path, "JPEG", quality=85)
+        all_cards = []
 
-        text  = extract_text(saved_path)  # 変換済みJPGでOCR
-        cards = parse_multiple_cards(text, file.filename)
-        for card in cards:
-            card["画像"] = saved_filename
-        # ※ここでは保存しない。/save エンドポイントで保存する
-        return jsonify({"success": True, "cards": cards, "count": len(cards), "raw_text": text})
+        if ext == "pdf":
+            # PDF：各ページを画像に変換してOCR
+            import fitz  # PyMuPDF
+            pdf = fitz.open(tmp_path)
+            for page_num in range(len(pdf)):
+                page = pdf[page_num]
+                mat = fitz.Matrix(2.0, 2.0)  # 解像度2倍
+                pix = page.get_pixmap(matrix=mat)
+                page_img_id = uuid.uuid4().hex
+                page_saved_filename = f"{page_img_id}.jpg"
+                page_saved_path = os.path.join(SAVED_FOLDER, page_saved_filename)
+                pix.save(page_saved_path)
+
+                text = extract_text(page_saved_path)
+                page_label = f"{file.filename} (P{page_num + 1})"
+                cards = parse_multiple_cards(text, page_label)
+                for card in cards:
+                    card["画像"] = page_saved_filename
+                all_cards.extend(cards)
+            pdf.close()
+        else:
+            # 画像ファイル（JPG / PNG / HEIC / TIFF）
+            img = Image.open(tmp_path).convert("RGB")
+            img.save(saved_path, "JPEG", quality=85)
+            text = extract_text(saved_path)
+            cards = parse_multiple_cards(text, file.filename)
+            for card in cards:
+                card["画像"] = saved_filename
+            all_cards = cards
+
+        return jsonify({"success": True, "cards": all_cards, "count": len(all_cards)})
+
     except Exception as e:
         if os.path.exists(saved_path):
             os.remove(saved_path)

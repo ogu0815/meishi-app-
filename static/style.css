@@ -116,18 +116,32 @@ main {
 .drop-text  { font-size: 1rem; font-weight: 700; color: var(--primary); }
 .drop-sub   { font-size: 0.8rem; color: var(--text-muted); }
 
+.file-btn-group {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
 .file-btn {
   background: linear-gradient(135deg, var(--primary), var(--accent));
   color: #fff;
-  padding: 12px 32px;
+  padding: 12px 24px;
   border-radius: 50px;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
   transition: opacity 0.2s, transform 0.15s;
   letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 .file-btn:active { opacity: 0.85; transform: scale(0.97); }
+
+.file-btn-secondary {
+  background: var(--surface);
+  color: var(--primary);
+  border: 2px solid var(--primary-light);
+}
 
 /* ---- プレビューエリア ---- */
 .preview-area {
