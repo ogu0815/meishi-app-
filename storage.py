@@ -38,15 +38,25 @@ APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:8000")
 # =============================================================
 
 def _get_gspread_sheet():
-    """認証してワークシートを返す"""
+    """認証してワークシートを返す（環境変数 or ファイルの両方に対応）"""
     import gspread
+    import json as _json
     from google.oauth2.service_account import Credentials
 
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
-    creds = Credentials.from_service_account_file(GOOGLE_CREDENTIALS_FILE, scopes=scopes)
+
+    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+    if creds_json:
+        # Render.com：環境変数から認証情報を読み込む
+        info  = _json.loads(creds_json)
+        creds = Credentials.from_service_account_info(info, scopes=scopes)
+    else:
+        # ローカル：credentials.json ファイルから読み込む
+        creds = Credentials.from_service_account_file(GOOGLE_CREDENTIALS_FILE, scopes=scopes)
+
     client = gspread.authorize(creds)
 
     try:
