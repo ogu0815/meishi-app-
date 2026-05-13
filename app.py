@@ -95,40 +95,48 @@ def allowed_file(filename):
 def detect_and_crop_cards(image_path):
     """
     画像から名刺領域を検出してクロップした画像リストを返す。
-    名刺が1枚しか検出されない or 検出失敗の場合は元画像をそのまま返す。
+    - 複数枚検出時：それぞれ切り出して返す
+    - 1枚検出かつ背景あり：切り出して返す
+    - 検出失敗：元画像をそのまま返す
     """
     import cv2
     import numpy as np
 
     img = cv2.imread(image_path)
     if img is None:
-        return [image_path]  # 読み込めない場合は元画像
+        return [image_path]
 
     h_img, w_img = img.shape[:2]
     img_area = h_img * w_img
 
-    gray    = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
-    edges   = cv2.Canny(blurred, 30, 120)
-    # 輪郭を繋げる
-    kernel  = np.ones((5, 5), np.uint8)
-    dilated = cv2.dilate(edges, kernel, iterations=2)
+    def find_candidates(gray, method="canny"):
+        """エッジ検出 → 輪郭 → 名刺候補を返す"""
+        if method == "canny":
+            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+            edges = cv2.Canny(blurred, 20, 100)
+        else:
+            blurred = cv2.GaussianBlur(gray, (11, 11), 0)
+            edges = cv2.adaptiveThreshold(
+                blurred, 255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2
+            )
+        kernel  = np.ones((5, 5), np.uint8)
+        dilated = cv2.dilate(edges, kernel, iterations=2)
+        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        results = []
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            # 画像全体の2%〜93%の面積を候補に
+            if area < img_area * 0.02 or area > img_area * 0.93:
+                continue
+            x, y, w, h = cv2.boundingRect(cnt)
+            ratio = w / h if h > 0 else 0
+            # 名刺アスペクト比：横置き(1.2〜2.6) or 縦置き(0.38〜0.83)
+            if 1.2 <= ratio <= 2.6 or 0.38 <= ratio <= 0.83:
+                results.append((x, y, w, h, area))
+        return results
 
-    candidates = []
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        # 画像全体の3%〜80%の面積のものを対象
-        if area < img_area * 0.03 or area > img_area * 0.80:
-            continue
-        x, y, w, h = cv2.boundingRect(cnt)
-        ratio = w / h if h > 0 else 0
-        # 名刺のアスペクト比：横置き(1.3〜2.2) or 縦置き(0.45〜0.77)
-        if 1.3 <= ratio <= 2.2 or 0.45 <= ratio <= 0.77:
-            candidates.append((x, y, w, h, area))
-
-    # 重複する領域をマージ（IoUで判定）
     def iou(a, b):
         ax, ay, aw, ah, _ = a
         bx, by, bw, bh, _ = b
@@ -141,28 +149,41 @@ def detect_and_crop_cards(image_path):
         union = aw*ah + bw*bh - inter
         return inter / union if union > 0 else 0
 
-    filtered = []
-    for c in sorted(candidates, key=lambda x: -x[4]):
-        if all(iou(c, f) < 0.4 for f in filtered):
-            filtered.append(c)
+    def deduplicate(candidates):
+        filtered = []
+        for c in sorted(candidates, key=lambda x: -x[4]):
+            if all(iou(c, f) < 0.35 for f in filtered):
+                filtered.append(c)
+        return filtered
 
-    # 1枚以下 or 検出失敗 → 元画像のまま
-    if len(filtered) <= 1:
-        return [image_path]
-
-    # 各名刺をクロップして保存
-    cropped_paths = []
-    for i, (x, y, w, h, _) in enumerate(filtered):
-        pad = 10  # 少し余白を持たせる
+    def save_crop(x, y, w, h, pad=15):
         x1 = max(0, x - pad); y1 = max(0, y - pad)
         x2 = min(w_img, x + w + pad); y2 = min(h_img, y + h + pad)
         cropped = img[y1:y2, x1:x2]
-        crop_id   = uuid.uuid4().hex
-        crop_path = os.path.join(SAVED_FOLDER, f"{crop_id}.jpg")
-        cv2.imwrite(crop_path, cropped)
-        cropped_paths.append(crop_path)
+        cid  = uuid.uuid4().hex
+        path = os.path.join(SAVED_FOLDER, f"{cid}.jpg")
+        cv2.imwrite(path, cropped)
+        return path
 
-    return cropped_paths
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Canny と Adaptive の両方で検出して統合
+    candidates = find_candidates(gray, "canny") + find_candidates(gray, "adaptive")
+    filtered   = deduplicate(candidates)
+
+    # ---- 複数枚検出 → それぞれクロップ ----
+    if len(filtered) >= 2:
+        return [save_crop(x, y, w, h) for x, y, w, h, _ in filtered]
+
+    # ---- 1枚検出 → 背景が多ければクロップ ----
+    if len(filtered) == 1:
+        x, y, w, h, area = filtered[0]
+        coverage = (w * h) / img_area
+        if coverage < 0.80:   # 画像の80%未満 → 余白が多いのでトリミング
+            return [save_crop(x, y, w, h)]
+
+    # ---- 検出失敗 or 画面いっぱいに名刺 → 元画像のまま ----
+    return [image_path]
 
 
 def preprocess_image(image_path):
