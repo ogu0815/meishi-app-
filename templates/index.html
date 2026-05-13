@@ -12,6 +12,10 @@
     <span class="header-icon">🪪</span>
     <h1>名刺管理</h1>
     <p>写真を撮るだけで自動で情報を抽出・保存</p>
+    <div class="header-actions">
+      <button class="btn-header-action" onclick="openPwModal()" title="パスワード変更">⚙️ 設定</button>
+      <a href="/logout" class="btn-header-action">🚪 ログアウト</a>
+    </div>
   </header>
 
   <main>
@@ -114,6 +118,26 @@
         <div class="edit-actions">
           <button type="submit" class="btn-primary">保存</button>
           <button type="button" class="btn-secondary" id="editCancelBtn">キャンセル</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- パスワード変更モーダル -->
+  <div class="modal" id="pwModal">
+    <div class="modal-backdrop" id="pwModalBackdrop"></div>
+    <div class="modal-content edit-modal-content">
+      <div class="modal-handle"></div>
+      <button class="modal-close" id="pwModalClose">✕</button>
+      <h3 class="edit-modal-title">🔑 パスワード変更</h3>
+      <form id="pwForm">
+        <div class="edit-field"><label>現在のパスワード</label><input type="password" id="pwCurrent" placeholder="現在のパスワード"></div>
+        <div class="edit-field"><label>新しいパスワード</label><input type="password" id="pwNew" placeholder="4文字以上"></div>
+        <div class="edit-field"><label>新しいパスワード（確認）</label><input type="password" id="pwConfirm" placeholder="もう一度入力"></div>
+        <p class="pw-error" id="pwError"></p>
+        <div class="edit-actions">
+          <button type="submit" class="btn-primary">変更する</button>
+          <button type="button" class="btn-secondary" id="pwCancelBtn">キャンセル</button>
         </div>
       </form>
     </div>
@@ -242,7 +266,7 @@
 
     async function saveCard(i, filename, imageFile, btn) {
       const cardId = `card_${i}`;
-      const fields = ["名前", "会社名", "部署", "役職", "電話番号", "メール", "住所"];
+      const fields = ["名前", "会社名", "部署", "役職", "電話番号1", "電話番号2", "メール", "住所"];
       const data = { "ファイル名": filename, "画像": imageFile };
       fields.forEach(f => {
         data[f] = document.getElementById(`${cardId}_${f}`).value;
@@ -290,7 +314,7 @@
       if (!query) return allRecords;
       const q = query.toLowerCase();
       return allRecords.filter(r =>
-        ["名前", "会社名", "部署", "役職", "メール", "住所", "電話番号"].some(key =>
+        ["名前", "会社名", "部署", "役職", "メール", "住所", "電話番号1", "電話番号2"].some(key =>
           (r[key] || "").toLowerCase().includes(q)
         )
       );
@@ -451,6 +475,43 @@
       imgModal.classList.remove("open");
       modalImg.src = "";
     }
+
+    // ---- パスワード変更モーダル ----
+    function openPwModal() {
+      document.getElementById("pwCurrent").value = "";
+      document.getElementById("pwNew").value = "";
+      document.getElementById("pwConfirm").value = "";
+      document.getElementById("pwError").textContent = "";
+      document.getElementById("pwModal").classList.add("open");
+    }
+    function closePwModal() {
+      document.getElementById("pwModal").classList.remove("open");
+    }
+    document.getElementById("pwModalClose").addEventListener("click", closePwModal);
+    document.getElementById("pwModalBackdrop").addEventListener("click", closePwModal);
+    document.getElementById("pwCancelBtn").addEventListener("click", closePwModal);
+
+    document.getElementById("pwForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const errEl = document.getElementById("pwError");
+      errEl.textContent = "";
+      const res = await fetch("/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          current: document.getElementById("pwCurrent").value,
+          new:     document.getElementById("pwNew").value,
+          confirm: document.getElementById("pwConfirm").value,
+        })
+      });
+      const json = await res.json();
+      if (json.success) {
+        closePwModal();
+        alert("✅ パスワードを変更しました\n次回ログインから新しいパスワードが有効です");
+      } else {
+        errEl.textContent = "⚠️ " + json.error;
+      }
+    });
 
     // 初回読み込み
     loadRecords();

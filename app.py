@@ -51,8 +51,20 @@ def _get_vision_client():
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "meishi-secret-key-change-in-production")
 
-# パスワード設定（環境変数 APP_PASSWORD で変更可能）
-APP_PASSWORD = os.environ.get("APP_PASSWORD", "meishi1234")
+# パスワード設定
+PASSWORD_CONFIG_FILE = "password_config.json"
+
+def load_app_password():
+    """設定ファイルからパスワードを読み込む。なければ環境変数のデフォルト値を使う"""
+    if os.path.exists(PASSWORD_CONFIG_FILE):
+        try:
+            with open(PASSWORD_CONFIG_FILE, "r") as f:
+                pw = json.load(f).get("password", "")
+                if pw:
+                    return pw
+        except Exception:
+            pass
+    return os.environ.get("APP_PASSWORD", "meishi1234")
 
 def login_required(f):
     @wraps(f)
@@ -419,7 +431,7 @@ def parse_multiple_cards(text: str, filename: str) -> list[dict]:
     for i, block in enumerate(blocks):
         data = parse_card(block, filename)
         # 最低1項目以上抽出できたブロックのみ有効とする
-        values = [data["名前"], data["会社名"], data["電話番号"], data["メール"], data["住所"]]
+        values = [data["名前"], data["会社名"], data["電話番号1"], data["電話番号2"], data["メール"], data["住所"]]
         if any(v for v in values):
             # 複数枚の場合はファイル名に番号を付ける
             if len(blocks) > 1:
@@ -439,7 +451,7 @@ def parse_multiple_cards(text: str, filename: str) -> list[dict]:
 def login():
     error = ""
     if request.method == "POST":
-        if request.form.get("password") == APP_PASSWORD:
+        if request.form.get("password") == load_app_password():
             session["logged_in"] = True
             return redirect(url_for("index"))
         error = "パスワードが違います"
@@ -603,6 +615,32 @@ def delete():
     index = request.json.get("index")
     try:
         delete_record(index)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/change-password", methods=["POST"])
+@login_required
+def change_password():
+    """パスワードを変更する"""
+    payload = request.json
+    current = payload.get("current", "")
+    new_pw  = payload.get("new", "")
+    confirm = payload.get("confirm", "")
+
+    if current != load_app_password():
+        return jsonify({"error": "現在のパスワードが違います"}), 400
+    if not new_pw:
+        return jsonify({"error": "新しいパスワードを入力してください"}), 400
+    if len(new_pw) < 4:
+        return jsonify({"error": "パスワードは4文字以上にしてください"}), 400
+    if new_pw != confirm:
+        return jsonify({"error": "新しいパスワードと確認用が一致しません"}), 400
+
+    try:
+        with open(PASSWORD_CONFIG_FILE, "w") as f:
+            json.dump({"password": new_pw}, f)
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
